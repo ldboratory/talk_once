@@ -96,6 +96,34 @@
 
     .sys-msg { text-align: center; font-size: 12px; color: var(--muted); padding: 6px 0; }
 
+    /* ── 참여자 패널 ── */
+    .members-btn { background: none; border: none; cursor: pointer; color: var(--muted); padding: 6px; border-radius: 8px; display: flex; align-items: center; gap: 5px; font-size: 13px; transition: color 0.2s, background 0.2s; margin-left: 8px; }
+    .members-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+    .members-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+    .panel-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 40; }
+    .panel-backdrop.show { display: block; }
+
+    .members-panel { position: fixed; top: 0; right: 0; width: 260px; height: 100%; background: var(--surface); border-left: 1px solid var(--border); z-index: 50; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 0.25s cubic-bezier(0.4,0,0.2,1); }
+    .members-panel.open { transform: translateX(0); }
+
+    .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .panel-title { font-size: 15px; font-weight: 700; }
+    .panel-count { font-size: 13px; color: var(--muted); margin-left: 6px; }
+    .panel-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; padding: 4px; border-radius: 6px; transition: color 0.2s; line-height: 1; }
+    .panel-close:hover { color: var(--text); }
+
+    .member-list { list-style: none; overflow-y: auto; flex: 1; padding: 10px 0; }
+    .member-list::-webkit-scrollbar { width: 4px; }
+    .member-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .member-item { display: flex; align-items: center; gap: 12px; padding: 9px 18px; transition: background 0.15s; }
+    .member-item:hover { background: rgba(255,255,255,0.04); }
+
+    .member-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: #fff; flex-shrink: 0; text-transform: uppercase; }
+    .member-nick { font-size: 14px; color: var(--text); }
+    .me-tag { font-size: 11px; color: var(--accent); font-style: normal; font-weight: 600; margin-left: 5px; background: rgba(124,111,255,0.15); padding: 1px 5px; border-radius: 4px; }
+
     /* ── 답글 미리보기 바 ── */
     .reply-bar { display: none; align-items: center; gap: 10px; padding: 8px 18px; background: var(--surface); border-top: 1px solid var(--accent); flex-shrink: 0; }
     .reply-bar-inner { flex: 1; min-width: 0; }
@@ -163,9 +191,18 @@
       <h2 id="roomLabel"></h2>
       <small id="myLabel"></small>
     </div>
-    <div class="online-badge">
-      <div class="dot"></div>
-      <span id="count">1명</span>
+    <div class="header-right" style="display:flex;align-items:center;">
+      <div class="online-badge">
+        <div class="dot"></div>
+        <span id="count">1명</span>
+      </div>
+      <button class="members-btn" id="membersBtn" title="참여자 목록">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        참여자
+      </button>
     </div>
   </div>
 
@@ -198,6 +235,19 @@
       <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
     </button>
   </div>
+</div>
+
+<!-- 참여자 패널 -->
+<div class="panel-backdrop" id="panelBackdrop"></div>
+<div class="members-panel" id="membersPanel">
+  <div class="panel-header">
+    <div>
+      <span class="panel-title">참여자</span>
+      <span class="panel-count" id="panelCount"></span>
+    </div>
+    <button class="panel-close" id="panelClose">✕</button>
+  </div>
+  <ul class="member-list" id="memberList"></ul>
 </div>
 
 <!-- 이미지 라이트박스 -->
@@ -333,6 +383,45 @@
     }
   });
 
+  /* ── 참여자 패널 ── */
+  const AVATAR_COLORS = ['#7c6fff','#4ade80','#f87171','#fb923c','#a78bfa','#34d399','#60a5fa','#f472b6','#facc15','#38bdf8'];
+  function nickColor(nick) {
+    let h = 0;
+    for (const c of nick) h = (h * 31 + c.charCodeAt(0)) & 0x7fffffff;
+    return AVATAR_COLORS[h % AVATAR_COLORS.length];
+  }
+
+  function openPanel() {
+    $('membersPanel').classList.add('open');
+    $('panelBackdrop').classList.add('show');
+  }
+  function closePanel() {
+    $('membersPanel').classList.remove('open');
+    $('panelBackdrop').classList.remove('show');
+  }
+
+  function renderMemberList(list) {
+    $('count').textContent = list.length + '명';
+    $('panelCount').textContent = list.length + '명';
+    const ul = $('memberList');
+    ul.innerHTML = '';
+    // 나를 맨 위로
+    const sorted = [...list].sort((a, b) => (b.nick === me) - (a.nick === me));
+    sorted.forEach(({ nick }) => {
+      const li = document.createElement('li');
+      li.className = 'member-item';
+      const isMe = nick === me;
+      li.innerHTML = `
+        <div class="member-avatar" style="background:${nickColor(nick)}">${[...nick][0].toUpperCase()}</div>
+        <span class="member-nick">${esc(nick)}${isMe ? '<em class="me-tag">나</em>' : ''}</span>`;
+      ul.appendChild(li);
+    });
+  }
+
+  $('membersBtn').addEventListener('click', openPanel);
+  $('panelClose').addEventListener('click', closePanel);
+  $('panelBackdrop').addEventListener('click', closePanel);
+
   /* ── 라이트박스 ── */
   function openLightbox(src) {
     $('lightboxImg').src = src;
@@ -440,7 +529,7 @@
     $('messages').appendChild(el);
     scrollBottom();
   });
-  socket.on('participants', n => { $('count').textContent = n + '명'; });
+  socket.on('participants', list => renderMemberList(list));
   socket.on('read-update', ({ msgId, readCount }) => {
     const el = document.getElementById('rd-' + msgId);
     if (el) el.textContent = readCount > 1 ? '읽음 ' + (readCount - 1) : '';

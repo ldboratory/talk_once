@@ -6,8 +6,6 @@ const { randomUUID } = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-
-// 이미지 전송을 위해 maxHttpBufferSize 5MB로 확장
 const io = new Server(server, { maxHttpBufferSize: 5 * 1024 * 1024 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -20,6 +18,14 @@ const rooms = new Map();
 function getRoom(code) {
   if (!rooms.has(code)) rooms.set(code, { users: new Map(), messages: [], reads: new Map() });
   return rooms.get(code);
+}
+
+// 참여자 목록을 배열로 전송 (이름 + socketId)
+function emitParticipants(roomCode) {
+  const room = rooms.get(roomCode);
+  if (!room) return;
+  const list = [...room.users.entries()].map(([sid, nick]) => ({ sid, nick }));
+  io.to(roomCode).emit('participants', list);
 }
 
 io.on('connection', (socket) => {
@@ -43,7 +49,7 @@ io.on('connection', (socket) => {
       readCount: (room.reads.get(m.id) || new Set()).size,
     }));
     socket.emit('joined', { roomCode, nickname, history });
-    io.to(roomCode).emit('participants', room.users.size);
+    emitParticipants(roomCode);
   });
 
   socket.on('message', (payload) => {
@@ -51,16 +57,15 @@ io.on('connection', (socket) => {
     const raw = typeof payload === 'string' ? { text: payload } : (payload || {});
     const text = String(raw.text || '').trim();
 
-    // 이미지 검증
     let imageData = null;
     if (raw.imageData) {
       const img = String(raw.imageData);
-      if (!img.startsWith('data:image/')) return; // 유효하지 않은 이미지
-      if (img.length > 4 * 1024 * 1024) return;  // 4MB 초과 차단
+      if (!img.startsWith('data:image/')) return;
+      if (img.length > 4 * 1024 * 1024) return;
       imageData = img;
     }
 
-    if (!text && !imageData) return; // 텍스트도 이미지도 없으면 무시
+    if (!text && !imageData) return;
 
     const room = rooms.get(curRoom);
     if (!room) return;
@@ -108,7 +113,7 @@ io.on('connection', (socket) => {
       rooms.delete(curRoom);
     } else {
       socket.to(curRoom).emit('system', `${curNick}님이 퇴장했습니다.`);
-      io.to(curRoom).emit('participants', room.users.size);
+      emitParticipants(curRoom);
     }
   });
 });
