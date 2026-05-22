@@ -289,6 +289,31 @@
     });
   }
 
+  // 클립보드 붙여넣기로 이미지 전송 (Ctrl+V)
+  document.addEventListener('paste', async e => {
+    if ($('chat').style.display !== 'flex') return; // 채팅 화면에서만 동작
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) return;
+        try {
+          $('imgBtn').style.opacity = '0.4';
+          const imageData = await compressImage(file);
+          socket.emit('message', { text: '', imageData, replyTo: replyTarget });
+          cancelReply();
+        } catch {
+          showErr('이미지 처리 중 오류가 발생했어요.');
+        } finally {
+          $('imgBtn').style.opacity = '';
+        }
+        break;
+      }
+    }
+  });
+
   $('imgBtn').addEventListener('click', () => $('imgInput').click());
   $('imgInput').addEventListener('change', async e => {
     const file = e.target.files[0];
