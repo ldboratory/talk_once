@@ -338,6 +338,22 @@
   $('msgInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
   $('sendBtn').addEventListener('click', send);
 
+  // 브라우저 알림 권한 요청
+  function requestNotify() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }
+
+  function notify(title, body) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    if (!document.hidden) return; // 탭이 활성화 상태면 알림 안 띄움
+    const n = new Notification(title, { body, icon: '' });
+    n.onclick = () => { window.focus(); n.close(); };
+    setTimeout(() => n.close(), 5000); // 5초 후 자동 닫힘
+  }
+
   // 소켓 이벤트
   socket.on('joined', ({ roomCode, nickname }) => {
     me = nickname;
@@ -346,6 +362,7 @@
     $('entry').style.display = 'none';
     $('chat').style.display = 'flex';
     $('msgInput').focus();
+    requestNotify(); // 입장 시 알림 권한 요청
   });
 
   socket.on('join-error', msg => {
@@ -355,6 +372,7 @@
 
   socket.on('message', ({ nickname, text, time }) => {
     const mine = nickname === me;
+    if (!mine) notify(`💬 ${nickname}`, text); // 상대 메시지 알림
     const wrap = document.createElement('div');
     wrap.className = 'msg-wrap ' + (mine ? 'mine' : 'other');
 
