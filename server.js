@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const { randomUUID } = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -9,60 +10,92 @@ const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// rooms: Map<roomCode, Map<socketId, nickname>>
+const MAX_MSGS = 200;
+
+// rooms: Map<code, { users: Map<socketId, nick>, messages: [], reads: Map<msgId, Set<socketId>> }>
 const rooms = new Map();
 
+function getRoom(code) {
+  if (!rooms.has(code)) rooms.set(code, { users: new Map(), messages: [], reads: new Map() });
+  return rooms.get(code);
+}
+
 io.on('connection', (socket) => {
-  let currentRoom = null;
-  let currentNickname = null;
+  let curRoom = null, curNick = null;
 
   socket.on('join', ({ roomCode, nickname }) => {
-    roomCode = String(roomCode).trim();
-    nickname = String(nickname).trim();
+    roomCode = String(roomCode || '').trim();
+    nickname = String(nickname || '').trim();
+    if (roomCode.length < 2) return socket.emit('join-error', '참여 코드는 2자 이상이어야 합니다.');
+    if (!nickname) return socket.emit('join-error', '닉네임을 입력해주세요.');
 
-    if (!roomCode || roomCode.length < 2) {
-      socket.emit('join-error', '참여 코드는 2자 이상이어야 합니다.');
-      return;
-    }
-    if (!nickname) {
-      socket.emit('join-error', '닉네임을 입력해주세요.');
-      return;
-    }
-
-    currentRoom = roomCode;
-    currentNickname = nickname;
-
-    if (!rooms.has(roomCode)) rooms.set(roomCode, new Map());
-    rooms.get(roomCode).set(socket.id, nickname);
-
+    curRoom = roomCode;
+    curNick = nickname;
+    const room = getRoom(roomCode);
+    room.users.set(socket.id, nickname);
     socket.join(roomCode);
     socket.to(roomCode).emit('system', `${nickname}님이 입장했습니다.`);
-    socket.emit('joined', { roomCode, nickname });
-    io.to(roomCode).emit('participants', rooms.get(roomCode).size);
+
+    // 기존 메시지 히스토리 + 읽음 수 포함해서 전달
+    const history = room.messages.map(m => ({
+      ...m,
+      readCount: (room.reads.get(m.id) || new Set()).size,
+    }));
+    socket.emit('joined', { roomCode, nickname, history });
+    io.to(roomCode).emit('participants', room.users.size);
   });
 
-  socket.on('message', (text) => {
-    if (!currentRoom || !currentNickname) return;
-    text = String(text).trim();
+  socket.on('message', (payload) => {
+    if (!curRoom || !curNick) return;
+    const raw = typeof payload === 'string' ? { text: payload } : (payload || {});
+    const text = String(raw.text || '').trim();
     if (!text || text.length > 500) return;
 
-    io.to(currentRoom).emit('message', {
-      nickname: currentNickname,
+    const room = rooms.get(curRoom);
+    if (!room) return;
+
+    const replyTo = raw.replyTo
+      ? {
+          id: String(raw.replyTo.id || '').slice(0, 40),
+          nickname: String(raw.replyTo.nickname || '').slice(0, 16),
+          text: String(raw.replyTo.text || '').slice(0, 100),
+        }
+      : null;
+
+    const msg = {
+      id: randomUUID(),
+      nickname: curNick,
       text,
       time: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
-    });
+      replyTo,
+    };
+
+    room.messages.push(msg);
+    if (room.messages.length > MAX_MSGS) room.messages.shift();
+    room.reads.set(msg.id, new Set([socket.id])); // 발신자는 자동 읽음
+
+    io.to(curRoom).emit('message', { ...msg, readCount: 1 });
+  });
+
+  socket.on('read', (msgId) => {
+    if (!curRoom) return;
+    const room = rooms.get(curRoom);
+    if (!room) return;
+    const readers = room.reads.get(String(msgId));
+    if (!readers || readers.has(socket.id)) return;
+    readers.add(socket.id);
+    io.to(curRoom).emit('read-update', { msgId, readCount: readers.size });
   });
 
   socket.on('disconnect', () => {
-    if (!currentRoom || !rooms.has(currentRoom)) return;
-    const room = rooms.get(currentRoom);
-    room.delete(socket.id);
-
-    if (room.size === 0) {
-      rooms.delete(currentRoom);
+    if (!curRoom || !rooms.has(curRoom)) return;
+    const room = rooms.get(curRoom);
+    room.users.delete(socket.id);
+    if (room.users.size === 0) {
+      rooms.delete(curRoom);
     } else {
-      socket.to(currentRoom).emit('system', `${currentNickname}님이 퇴장했습니다.`);
-      io.to(currentRoom).emit('participants', room.size);
+      socket.to(curRoom).emit('system', `${curNick}님이 퇴장했습니다.`);
+      io.to(curRoom).emit('participants', room.users.size);
     }
   });
 });
