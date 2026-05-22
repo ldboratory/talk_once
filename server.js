@@ -84,7 +84,7 @@ io.on('connection', (socket) => {
       nickname: curNick,
       text,
       imageData,
-      time: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
+      time: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Seoul' }),
       replyTo,
     };
 
