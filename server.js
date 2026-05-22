@@ -6,7 +6,9 @@ const { randomUUID } = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+// 이미지 전송을 위해 maxHttpBufferSize 5MB로 확장
+const io = new Server(server, { maxHttpBufferSize: 5 * 1024 * 1024 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -36,7 +38,6 @@ io.on('connection', (socket) => {
     socket.join(roomCode);
     socket.to(roomCode).emit('system', `${nickname}님이 입장했습니다.`);
 
-    // 기존 메시지 히스토리 + 읽음 수 포함해서 전달
     const history = room.messages.map(m => ({
       ...m,
       readCount: (room.reads.get(m.id) || new Set()).size,
@@ -49,7 +50,17 @@ io.on('connection', (socket) => {
     if (!curRoom || !curNick) return;
     const raw = typeof payload === 'string' ? { text: payload } : (payload || {});
     const text = String(raw.text || '').trim();
-    if (!text || text.length > 500) return;
+
+    // 이미지 검증
+    let imageData = null;
+    if (raw.imageData) {
+      const img = String(raw.imageData);
+      if (!img.startsWith('data:image/')) return; // 유효하지 않은 이미지
+      if (img.length > 4 * 1024 * 1024) return;  // 4MB 초과 차단
+      imageData = img;
+    }
+
+    if (!text && !imageData) return; // 텍스트도 이미지도 없으면 무시
 
     const room = rooms.get(curRoom);
     if (!room) return;
@@ -59,6 +70,7 @@ io.on('connection', (socket) => {
           id: String(raw.replyTo.id || '').slice(0, 40),
           nickname: String(raw.replyTo.nickname || '').slice(0, 16),
           text: String(raw.replyTo.text || '').slice(0, 100),
+          isImage: !!raw.replyTo.isImage,
         }
       : null;
 
@@ -66,13 +78,14 @@ io.on('connection', (socket) => {
       id: randomUUID(),
       nickname: curNick,
       text,
+      imageData,
       time: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
       replyTo,
     };
 
     room.messages.push(msg);
     if (room.messages.length > MAX_MSGS) room.messages.shift();
-    room.reads.set(msg.id, new Set([socket.id])); // 발신자는 자동 읽음
+    room.reads.set(msg.id, new Set([socket.id]));
 
     io.to(curRoom).emit('message', { ...msg, readCount: 1 });
   });
